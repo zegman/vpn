@@ -1,5 +1,5 @@
 A MacOS bash script for temproarily launching an instance in Google Cloud Platform (GCP) to act as a web proxy and configure the local MacOS to use it.
-After the proxy is set up, the scrpt:
+After the proxy is set up, the script:
 - Launches an incognito Chrome tab.
 - Waits for any key press and then terminates the instance and removes the local proxy configuration.
 
