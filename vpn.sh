@@ -34,6 +34,7 @@ export CLOUDSDK_COMPUTE_ZONE=$ZONE
 gcloud compute instances create \
     "$INSTANCE_NAME" \
     --project="$PROJECT" \
+    --metadata vmDnsSetting=ZonalOnly \
     --machine-type="$INSTANCE_TYPE" \
     --create-disk=boot=yes,image-family=debian-11,image-project=debian-cloud,size=10,type=pd-standard
 
