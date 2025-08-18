@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #   Copyright 2023 Tamir Zegman
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,57 +13,61 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-set -e
+set -euo pipefail
 
-INSTANCE_NAME="vpn"
-INSTANCE_TYPE="e2-micro"
-PROJECT="$(gcloud config get project)"
-LOCAL_PORT=8080
-APP="Google Chrome"
-APP_FLAGS="-incognito"
+INSTANCE_NAME='vpn'
+INSTANCE_TYPE='e2-micro'
+PROJECT="$(gcloud config get project 2>/dev/null)"
+LOCAL_PORT=${LOCAL_PORT:-8080}
+APP=${APP:-'Google Chrome'}
+APP_FLAGS=${APP_FLAGS:-'-incognito'}
+SERVICE=${SERVICE:-'Wi-Fi'}
 
-if [ -n "$1" ]; then
-    ZONE="$1"
-else
-    ZONE=$(gcloud compute zones list --format="value(name)" | shuf -n1)
-    echo "Using zone: $ZONE"
-fi
+ZONE="${1:-$(gcloud compute zones list --format='value(name)' 2>/dev/null | shuf -n1)}"
+export CLOUDSDK_COMPUTE_ZONE="$ZONE" CLOUDSDK_CORE_DISABLE_PROMPTS=1
 
-export CLOUDSDK_COMPUTE_ZONE=$ZONE
-
-gcloud compute instances create \
-    "$INSTANCE_NAME" \
-    --project="$PROJECT" \
-    --metadata vmDnsSetting=ZonalOnly \
-    --machine-type="$INSTANCE_TYPE" \
-    --create-disk=boot=yes,image-family=debian-11,image-project=debian-cloud,size=10,type=pd-standard
-
-echo "Waiting for instance to start"
-until gcloud compute ssh "$INSTANCE_NAME" --command="true"; do
-    sleep 1
-    echo -n "."
-done
-echo
-echo "Instance started"
-
-gcloud compute ssh "$INSTANCE_NAME" -- \
-    -D "localhost:$LOCAL_PORT" \
-    -f \
-    -q \
-    -N
-
-networksetup -setsocksfirewallproxy wi-fi localhost "$LOCAL_PORT"
-
-open -a "$APP" $APP_FLAGS
-
-echo "Press any key to exit"
-read -n 1 -s
-
-echo "Done"
-
-networksetup -setsocksfirewallproxystate wi-fi off
-gcloud compute instances delete \
+cleanup() {
+  echo
+  echo 'Cleaning up...'
+  networksetup -setsocksfirewallproxystate "$SERVICE" off >/dev/null 2>&1 || true
+  gcloud compute instances delete \
     "$INSTANCE_NAME" \
     --project="$PROJECT" \
     --delete-disks=all \
-    --quiet
+    --quiet >/dev/null 2>&1 || true
+}
+trap cleanup EXIT INT TERM
+
+echo "Creating instance in $ZONE..."
+gcloud compute instances create \
+  "$INSTANCE_NAME" \
+  --project="$PROJECT" \
+  --metadata=vmDnsSetting=ZonalOnly \
+  --machine-type="$INSTANCE_TYPE" \
+  --create-disk=boot=yes,image-family=debian-11,image-project=debian-cloud,size=10,type=pd-standard \
+  --quiet >/dev/null 2>&1
+
+IP="$(gcloud compute instances describe "$INSTANCE_NAME" --project="$PROJECT" --format='get(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null)"
+
+printf 'Waiting for SSH on %s' "$IP"
+until nc -z "$IP" 22 >/dev/null 2>&1; do
+  printf '.'
+  sleep 1
+done
+echo ' ready'
+
+gcloud compute ssh "$INSTANCE_NAME" --project="$PROJECT" -- \
+  -N -f -D "localhost:$LOCAL_PORT" \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o LogLevel=ERROR >/dev/null 2>&1
+
+networksetup -setsocksfirewallproxy "$SERVICE" localhost "$LOCAL_PORT" >/dev/null
+
+echo "SOCKS proxy on localhost:$LOCAL_PORT. Launching browser..."
+open -ga "$APP" $APP_FLAGS >/dev/null 2>&1 || true
+
+echo 'Press any key to exit'
+read -n1 -s || true
+
+echo 'Done.'
